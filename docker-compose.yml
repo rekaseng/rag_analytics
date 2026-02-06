@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ragas_backend
+    ports:
+      - "8000:8000"
+    restart: always
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: ragas_dashboard
+    ports:
+      - "3005:3005"
+    depends_on:
+      - backend
+    restart: always

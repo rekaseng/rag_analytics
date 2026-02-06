@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy dashboard code
+COPY dashboard_app ./dashboard_app
+
+EXPOSE 3005
+
+CMD ["streamlit", "run", "dashboard_app/app.py", "--server.port=3005", "--server.address=0.0.0.0"]
