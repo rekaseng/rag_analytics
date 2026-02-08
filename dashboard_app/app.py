@@ -12,6 +12,10 @@ import plotly.express as px
 from matplotlib import colors
 import altair as alt
 from io import BytesIO
+from utils.constants import REQUIRED_RAGAS_COLS, REQUIRED_CONTEXT_COLS, METRIC_MAP
+from services.csv_loader import load_csv_safe
+from utils.formatting import styled_metric
+from components.filters import ragas_metric_filters
 
 st.set_page_config(layout="wide", page_title="Dashboard")
 
@@ -255,108 +259,7 @@ elif page == "RAGAS Dashboard":
         type=["csv"],
         help="Upload a context_bi CSV file"
     )
-
-    @st.cache_data
-    def load_csv_safe(file_bytes, file_name, default_path, required_cols):
-        try:
-            if file_bytes is not None:
-                df = pd.read_csv(BytesIO(file_bytes))
-            else:
-                df = pd.read_csv(default_path)
-
-            missing = required_cols - set(df.columns)
-            if missing:
-                return None, f"❌ `{file_name}` is missing columns: {', '.join(missing)}"
-
-            return df, None
-
-        except Exception as e:
-            return None, f"❌ Failed to load `{file_name}`: {str(e)}"
     
-    REQUIRED_RAGAS_COLS = {
-        # Identifiers
-        "ticket_id",
-
-        # Core text fields (used in drill-down & analysis)
-        "question",
-        "rag_answer",
-        "ground_truth",
-
-        # RAGAS retrieval metrics
-        "context_entity_recall",
-        "context_precision",
-        "context_recall",
-
-        # RAGAS answer quality metrics
-        "answer_correctness",
-        "answer_similarity",
-        "answer_relevancy",
-        "faithfulness",
-
-        # Resolution & QA signals
-        "resolution_category",
-        "resolution_confidence",
-        "needs_manual_review",
-
-        # Context statistics
-        "context_count",
-        "useful_context_count",
-        "dropped_context_count",
-
-        # Keyword analysis (used in context dashboard)
-        "question_keywords",
-        "ground_truth_keywords",
-        "rag_answer_keywords",
-        "missing_answer_keywords",
-        "missing_context_keywords",
-
-        # Ranking / prioritization
-        "rank",
-        "rank_reason",
-    }
-    REQUIRED_CONTEXT_COLS = {
-        # Identifiers
-        "ticket_id",
-        "context_id",
-
-        # Raw context content
-        "context_text",
-
-        # Context size metrics
-        "context_char_count",
-        "context_token_count",
-
-        # Keyword extraction
-        "context_keywords",
-        "question_keywords",
-        "ground_truth_keywords",
-        "rag_answer_keywords",
-
-        # Keyword overlap analysis
-        "overlapping_question_keywords",
-        "overlapping_ground_truth_keywords",
-        "overlapping_answer_keywords",
-
-        # Coverage metrics (core analytics)
-        "question_keyword_coverage_pct",
-        "ground_truth_keyword_coverage_pct",
-        "rag_answer_keyword_coverage_pct",
-
-        # Missing keyword analysis
-        "missing_question_keywords",
-        "missing_ground_truth_keywords",
-
-        # Entity & usefulness signals
-        "entity_match",
-        "is_context_useful",
-        "usefulness_reason",
-        "drop_recommendation",
-
-        # Ranking / prioritization
-        "rank",
-        "rank_reason",
-    }
-
     df, ragas_error = load_csv_safe(
         ragas_file.getvalue() if ragas_file else None,
         ragas_file.name if ragas_file else "default_ragas",
@@ -387,124 +290,15 @@ elif page == "RAGAS Dashboard":
     st.sidebar.success(
         f"🧩 context_bi loaded: {context_file.name if context_file else 'Default dataset'}"
     )
-
-    # ---------------------------
-    # Session State Initialization (CRITICAL)
-    # ---------------------------
-    if "metric_select" not in st.session_state:
-        st.session_state.metric_select = "Answer Correctness"
-
-    if "threshold_slider" not in st.session_state:
-        st.session_state.threshold_slider = (0, 100)
-
-    if "status_filter" not in st.session_state:
-        st.session_state.status_filter = ["🔴 Critical", "🟠 Warning", "🟢 Good"]
-
-    # ---------------------------
-    # Helper functions
-    # ---------------------------
-    def score_badge(value):
-        if value < 40:
-            return "🔴 Critical"
-        elif value < 70:
-            return "🟠 Warning"
-        else:
-            return "🟢 Good"
-        
+     
     st.title("RAGAS BI Analytics")
     st.subheader("1. Ragas Analysis Dashboard OB2C 20260128")
-
-    def styled_metric(label, value, is_percent=True):
-        display_value = f"{value:.2f}%" if is_percent else f"{value:.2f}"
-        badge = score_badge(value)
-
-        st.markdown(
-            f"""
-            <div style="
-                padding:10px;
-                margin:12px;
-                border-radius:14px;
-                background-color:#f9f9f9;
-                box-shadow:0 4px 10px rgba(0,0,0,0.08);
-                text-align:center;
-            ">
-                <div style="font-size:14px;color:#777;">{label}</div>
-                <div style="font-size:30px;font-weight:700;">{display_value}</div>
-                <div style="font-size:14px;margin-top:6px;">{badge}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
 
     # ---------------------------
     # Filters
     # ---------------------------
-    st.sidebar.header("🎯 Metric Filters")
-
-    metric_map = {
-        "Answer Correctness": "answer_correctness",
-        "Answer Similarity": "answer_similarity",
-        "Answer Relevancy": "answer_relevancy",
-        "Faithfulness": "faithfulness",
-        "Context Precision": "context_precision",
-        "Context Recall": "context_recall",
-        "Context Entity Recall": "context_entity_recall",
-    }
-
-    selected_metric_label = st.sidebar.selectbox(
-        "Select Metric",
-        list(metric_map.keys()),
-        key="metric_select"
-    )
-
-    selected_metric = metric_map[selected_metric_label]
-
-    threshold_range = st.sidebar.slider(
-        "Score Threshold (%)",
-        min_value=0,
-        max_value=100,
-        key="threshold_slider"
-    )
-
-    status_filter = st.sidebar.multiselect(
-        "Score Status",
-        ["🔴 Critical", "🟠 Warning", "🟢 Good"],
-        key="status_filter"
-    )
-
-    # ---------------------------
-    # Reset callback (SAFE)
-    # ---------------------------
-    def reset_filters():
-        st.session_state.metric_select = "Answer Correctness"
-        st.session_state.threshold_slider = (0, 100)
-        st.session_state.status_filter = ["🔴 Critical", "🟠 Warning", "🟢 Good"]
-
-    st.sidebar.divider()
-    st.sidebar.button("🔄 Reset to Default", on_click=reset_filters)
-
-    # ---------------------------
-    # Filtering logic
-    # ---------------------------
-    df["_metric_pct"] = df[selected_metric] * 100
-
-    filtered_df = df[
-        (df["_metric_pct"] >= threshold_range[0]) &
-        (df["_metric_pct"] <= threshold_range[1])
-    ]
-
-    def status_from_value(v):
-        if v < 40:
-            return "🔴 Critical"
-        elif v < 70:
-            return "🟠 Warning"
-        else:
-            return "🟢 Good"
-
-    filtered_df = filtered_df[
-        filtered_df["_metric_pct"].apply(status_from_value).isin(status_filter)
-    ]
-
+    # Apply RAGAS metric filters
+    filtered_df, selected_metric = ragas_metric_filters(df)
     # ---------------------------
     # KPI calculations
     # ---------------------------
