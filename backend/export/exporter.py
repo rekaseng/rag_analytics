@@ -4,14 +4,18 @@ import os
 BASE = "outputs"
 os.makedirs(BASE, exist_ok=True)
 
-def export_outputs(job_id, ragas_bi, context_bi):
+def export_outputs(job_id, ragas_bi, context_bi, evaluation_bi):
     ragas_path = f"{BASE}/{job_id}_ragas_bi.csv"
     context_path = f"{BASE}/{job_id}_context_bi.csv"
+    evaluation_path = f"{BASE}/{job_id}_evaluation_bi.csv"
 
     pd.DataFrame(ragas_bi).to_csv(ragas_path, index=False)
     pd.DataFrame(context_bi).to_csv(context_path, index=False)
+    pd.DataFrame(evaluation_bi).to_csv(evaluation_path, index=False)
+
 
     return {
         "ragas_bi": ragas_path,
-        "context_bi": context_path
+        "context_bi": context_path,
+        "evaluation_bi": evaluation_path
     }
