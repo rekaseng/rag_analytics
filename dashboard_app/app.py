@@ -16,6 +16,9 @@ from utils.constants import REQUIRED_RAGAS_COLS, REQUIRED_CONTEXT_COLS, METRIC_M
 from services.csv_loader import load_csv_safe
 from utils.formatting import styled_metric
 from components.filters import ragas_metric_filters
+from components.metrics import render_ragas_kpis, render_total_context_card
+from components.charts import render_keyword_coverage_chart, render_context_answer_scatter, render_ground_truth_quality, render_question_coverage
+from services.json_loader import load_json_safe
 
 st.set_page_config(layout="wide", page_title="Dashboard")
 
@@ -294,75 +297,17 @@ elif page == "RAGAS Dashboard":
     st.title("RAGAS BI Analytics")
     st.subheader("1. Ragas Analysis Dashboard OB2C 20260128")
 
-    # ---------------------------
-    # Filters
-    # ---------------------------
-    # Apply RAGAS metric filters
+
     filtered_df, selected_metric = ragas_metric_filters(df)
-    # ---------------------------
-    # KPI calculations
-    # ---------------------------
-    avg_answer_correctness = filtered_df["answer_correctness"].mean() * 100
-    avg_answer_relevancy = filtered_df["answer_relevancy"].mean() * 100
-    avg_answer_similarity = filtered_df["answer_similarity"].mean() * 100
-    avg_context_precision = filtered_df["context_precision"].mean() * 100
-    avg_context_recall = filtered_df["context_recall"].mean() * 100
-    avg_faithfulness = filtered_df["faithfulness"].mean() * 100
-    avg_entity_recall = filtered_df["context_entity_recall"].mean() * 100
 
-    # ---------------------------
-    # Ragas Metrics Average Score
-    # ---------------------------
-
-    row1 = st.columns(4)
-    row2 = st.columns(4)
-
-    with row1[0]:
-        styled_metric("Avg Answer Correctness", avg_answer_correctness)
-    with row1[1]:
-        styled_metric("Avg Answer Relevancy", avg_answer_relevancy)
-    with row1[2]:
-        styled_metric("Avg Faithfulness", avg_faithfulness)
-    with row1[3]:
-        styled_metric("Avg Similarity", avg_answer_similarity)
-
-    with row2[0]:
-        styled_metric("Avg Context Precision", avg_context_precision)
-    with row2[1]:
-        styled_metric("Avg Context Recall", avg_context_recall)
-    with row2[2]:
-        styled_metric("Avg Context Entity Recall", avg_entity_recall)
-    # row2[3] intentionally left empty
+    render_ragas_kpis(filtered_df)
 
     total_contexts = len(context_df)
-    st.markdown(
-    f"""
-    <div style="
-        width:240px;
-        padding:16px;
-        border-radius:14px;
-        background-color:#ffffff;
-        box-shadow:0 2px 8px rgba(0,0,0,0.08);
-        text-align:center;
-        margin-bottom:24px;
-    ">
-        <div style="font-size:14px;color:#888;margin-bottom:8px;">
-            🧩 Total Contexts
-        </div>
-        <div style="font-size:32px;font-weight:700;color:#2f2f2f;">
-            {total_contexts}
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-    )
+
+    render_total_context_card(total_contexts)
 
     st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
 
-
-    # ---------------------------
-    # Raw data
-    # ---------------------------
     with st.expander("🔍 View Raw ragas_bi Data (Select a Ticket)"):
         st.caption("Tick **one** ticket to view its related contexts")
 
@@ -415,350 +360,26 @@ elif page == "RAGAS Dashboard":
 
     st.subheader("2. Context Analysis Dashboard")
 
-    coverage_df = (
-    context_df
-    .groupby("ticket_id", as_index=False)
-    .agg({
-        "question_keyword_coverage_pct": "mean",
-        "ground_truth_keyword_coverage_pct": "mean",
-        "rag_answer_keyword_coverage_pct": "mean"
-    })
-    )
+    render_keyword_coverage_chart(context_df, filtered_df)
 
-    # Convert to percentage (0–100)
-    coverage_cols = [
-        "question_keyword_coverage_pct",
-        "ground_truth_keyword_coverage_pct",
-        "rag_answer_keyword_coverage_pct"
-    ]
-
-    coverage_df[coverage_cols] = (coverage_df[coverage_cols] * 100).round(2)
-    bar_df = coverage_df[coverage_cols].mean().reset_index()
-    bar_df.columns = ["Metric", "Average Coverage (%)"]
-
-    color_scale = alt.Scale(
-        domain=[
-            "question_keyword_coverage_pct",
-            "ground_truth_keyword_coverage_pct",
-            "rag_answer_keyword_coverage_pct"
-        ],
-        range=[
-            "#A7C7E7",  # soft blue
-            "#B7E4C7",  # soft green
-            "#FFD6A5"   # soft orange
-        ]
-    )
-
-
-    coverage_df = coverage_df[
-    coverage_df["ticket_id"].isin(filtered_df["ticket_id"])
-    ]
-
-    st.subheader("📊 Contexts Keyword Coverage Analysis")
-
-    chart_type = st.radio(
-        "Chart Type",
-        ["Bar Chart (Average)", "Line Chart (Trend)"],
-        horizontal=True
-    )
-
-    if chart_type == "Bar Chart (Average)":
-        bar_chart = (
-            alt.Chart(bar_df)
-            .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
-            .encode(
-                x=alt.X("Metric:N", title=None),
-                y=alt.Y(
-                    "Average Coverage (%):Q",
-                    scale=alt.Scale(domain=[0, 100]),
-                    title="Coverage (%)"
-                ),
-                color=alt.Color("Metric:N", scale=color_scale, legend=None),
-                tooltip=[
-                    alt.Tooltip("Metric:N", title="Metric"),
-                    alt.Tooltip("Average Coverage (%):Q", format=".2f")
-            ]
-        )
-        .properties(height=320)
-    )
-
-        st.altair_chart(bar_chart, use_container_width=True)
-
-    if chart_type == "Line Chart (Trend)":
-        line_df = coverage_df.sort_values("ticket_id")
-
-        st.line_chart(
-            line_df.set_index("ticket_id")[[
-                "question_keyword_coverage_pct",
-                "ground_truth_keyword_coverage_pct",
-                "rag_answer_keyword_coverage_pct"
-            ]]
-        )
-
-    st.caption("""
-    **How to read this chart**
-    - Question Coverage → Did retrieved context cover the user's intent?
-    - Ground Truth Coverage → Did context support the correct answer?
-    - Answer Coverage → Did the final answer use what was retrieved?
-    """)
-
-    scatter_df = context_df.copy()
-    scatter_df["rag_answer_keyword_coverage_pct"] = (
-        scatter_df["rag_answer_keyword_coverage_pct"] * 100
-    )
-    # Ensure correct dtypes
-    scatter_df["is_context_useful"] = scatter_df["is_context_useful"].astype(str)
-
-    st.subheader("🔬 Context Quality vs Answer Coverage")
-
-    scatter_chart = (
-        alt.Chart(scatter_df)
-        .mark_circle(size=120, opacity=0.7)
-        .encode(
-            x=alt.X(
-                "context_token_count:Q",
-                title="Context Token Count",
-                scale=alt.Scale(zero=False)
-            ),
-            y=alt.Y(
-                "rag_answer_keyword_coverage_pct:Q",
-                title="Answer Keyword Coverage (%)",
-                scale=alt.Scale(domain=[0, 100])
-            ),
-            color=alt.Color(
-                "is_context_useful:N",
-                title="Context Useful",
-                scale=alt.Scale(
-                    domain=["True", "False"],
-                    range=["#74C69D", "#F28482"]  # soft green / soft red
-                )
-            ),
-            tooltip=[
-                alt.Tooltip("context_id:N", title="Context ID"),
-                alt.Tooltip("ticket_id:N", title="Ticket ID"),
-                alt.Tooltip("context_token_count:Q", title="Token Count"),
-                alt.Tooltip("rag_answer_keyword_coverage_pct:Q", title="Coverage (%)", format=".2f"),
-                alt.Tooltip("is_context_useful:N", title="Useful")
-            ]
-        )
-        .properties(height=380)
-    )
-
-    st.altair_chart(scatter_chart, use_container_width=True)
-
-    st.caption("""
-    **How to read this scatter plot**
-    - X-axis → Context length (tokens)
-    - Y-axis → How much the answer used this context
-    - Color → Whether the context was marked useful
-
-    Ideal contexts appear as **large green circles in the upper-right**.
-    """)
-
-    # Use ONLY the selected ticket's contexts
-    gt_df = context_df.copy()
-
-    # Ensure correct types
-    gt_df["is_context_useful"] = gt_df["is_context_useful"].astype(str)
-
-    # Scale to percentage if still 0–1
-    if gt_df["ground_truth_keyword_coverage_pct"].max() <= 1:
-        gt_df["ground_truth_keyword_coverage_pct"] *= 100
-
-    # -----------------------
-    # Box plot
-    # -----------------------
-    box = (
-        alt.Chart(gt_df)
-        .mark_boxplot(
-            extent="min-max",
-            size=60,
-            opacity=0.6
-        )
-        .encode(
-            x=alt.X(
-                "is_context_useful:N",
-                title="Context Useful",
-                axis=alt.Axis(labelAngle=0)
-            ),
-            y=alt.Y(
-                "ground_truth_keyword_coverage_pct:Q",
-                title="Ground Truth Coverage (%)",
-                scale=alt.Scale(domain=[0, 100])
-            ),
-            color=alt.Color(
-                "is_context_useful:N",
-                scale=alt.Scale(
-                    domain=["True", "False"],
-                    range=["#74C69D", "#F28482"]
-                ),
-                legend=None
-            )
-        )
-    )
-
-    # -----------------------
-    # Jittered points
-    # -----------------------
-    points = (
-        alt.Chart(gt_df)
-        .mark_circle(
-            size=120,
-            opacity=0.7,
-            stroke="white",
-            strokeWidth=0.8
-        )
-        .encode(
-            x=alt.X("is_context_useful:N", title=None),
-            y=alt.Y("ground_truth_keyword_coverage_pct:Q"),
-            color=alt.Color(
-                "is_context_useful:N",
-                scale=alt.Scale(
-                    domain=["True", "False"],
-                    range=["#74C69D", "#F28482"]
-                ),
-                legend=None
-            ),
-            tooltip=[
-                alt.Tooltip("ticket_id:N", title="Ticket"),
-                alt.Tooltip("context_id:N", title="Context"),
-                alt.Tooltip(
-                    "ground_truth_keyword_coverage_pct:Q",
-                    title="GT Coverage (%)",
-                    format=".2f"
-                )
-            ]
-        )
-    )
-
-    # -----------------------
-    # Threshold lines
-    # -----------------------
-    thresholds = (
-        alt.Chart(pd.DataFrame({"y": [40, 70]}))
-        .mark_rule(strokeDash=[4, 4], color="#999")
-        .encode(y="y:Q")
-    )
-
-    qc_df = context_df.copy()
-
-    # Ensure correct types
-    qc_df["is_context_useful"] = qc_df["is_context_useful"].astype(str)
-
-    # Scale to percentage if still 0–1
-    if qc_df["question_keyword_coverage_pct"].max() <= 1:
-        qc_df["question_keyword_coverage_pct"] *= 100
-
-    hist = (
-        alt.Chart(qc_df)
-        .mark_bar(opacity=0.65)
-        .encode(
-            x=alt.X(
-                "question_keyword_coverage_pct:Q",
-                bin=alt.Bin(step=10),
-                title="Question Keyword Coverage (%)",
-                scale=alt.Scale(domain=[0, 100])
-            ),
-            y=alt.Y(
-                "count():Q",
-                title="Number of Contexts"
-            ),
-            color=alt.Color(
-                "is_context_useful:N",
-                title="Context Useful",
-                scale=alt.Scale(
-                    domain=["True", "False"],
-                    range=["#74C69D", "#F28482"]  # soft green / soft red
-                )
-            ),
-            tooltip=[
-                alt.Tooltip("count():Q", title="Context Count"),
-                alt.Tooltip("is_context_useful:N", title="Useful")
-            ]
-        )
-        .properties(height=320)
-    )
+    render_context_answer_scatter(context_df)
 
     col_gt, col_qc = st.columns(2)
 
     with col_gt:
-        st.markdown(
-            "<h4 style='margin-bottom:3px;'>🔬 Context Quality vs Ground Truth Coverage</h4>",
-            unsafe_allow_html=True
-        )
-
-        final_chart = (box + points + thresholds).properties(height=360)
-        st.altair_chart(final_chart, use_container_width=True)
-
-        median_gt = gt_df["ground_truth_keyword_coverage_pct"].median()
-
-        if median_gt < 40:
-            interpretation = (
-                "🔴 **Ground-truth coverage is low across contexts.** "
-                "Retrieved contexts do not sufficiently support the correct answer."
-            )
-        elif median_gt < 70:
-            interpretation = (
-                "🟠 **Ground-truth coverage is moderate but inconsistent.** "
-                "Retrieval partially works; consider improving source quality or ranking."
-            )
-        else:
-            interpretation = (
-                "🟢 **Contexts strongly support ground truth.** "
-                "Retrieval quality is solid; focus optimization on generation."
-            )
-
-        st.caption(interpretation)
+        render_ground_truth_quality(context_df)
 
     with col_qc:
-        st.markdown(
-            "<h4 style='margin-bottom:40px;'>🔍 Context Quality vs Question Coverage</h4>",
-            unsafe_allow_html=True
-        )
-
-        st.altair_chart(hist, use_container_width=True)
-
-        useful = qc_df[qc_df["is_context_useful"] == "True"]
-        not_useful = qc_df[qc_df["is_context_useful"] == "False"]
-
-        useful_median = useful["question_keyword_coverage_pct"].median() if not useful.empty else 0
-        not_useful_median = not_useful["question_keyword_coverage_pct"].median() if not not_useful.empty else 0
-
-        if useful_median < 40:
-            interpretation = (
-                "🔴 **Question keyword coverage is weak across contexts.** "
-                "Retrieval is not sufficiently covering the user’s intent."
-            )
-        elif useful_median > not_useful_median + 10:
-            interpretation = (
-                "🟢 **Useful contexts clearly cover the question better.** "
-                "Recall quality is strong; focus optimization downstream."
-            )
-        elif abs(useful_median - not_useful_median) < 5:
-            interpretation = (
-                "🟠 **Question coverage does not strongly differentiate useful vs non-useful contexts.** "
-                "Retrieval may be noisy or overly broad."
-            )
-        else:
-            interpretation = (
-                "🟡 **Question coverage is moderate but inconsistent.** "
-                "Consider improving query expansion or keyword weighting."
-            )
-
-        st.caption(interpretation)
+        render_question_coverage(context_df)
 
 elif page == "Ragas Evaluation Report":
     st.title("Ragas Evaluation Report")
 
-    # -----------------------------
-    # CSV Loader
-    # -----------------------------
     @st.cache_data
     def load_ragas_csv(path: str):
         return pd.read_csv(path)
 
-    csv_path = "ragas_results.csv"  # <-- change to your actual CSV filename
-
+    csv_path = "ragas_results.csv"
 
     try:
         df = load_ragas_csv(csv_path)
