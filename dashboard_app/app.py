@@ -12,13 +12,21 @@ import plotly.express as px
 from matplotlib import colors
 import altair as alt
 from io import BytesIO
-from utils.constants import REQUIRED_RAGAS_COLS, REQUIRED_CONTEXT_COLS, METRIC_MAP
-from services.csv_loader import load_csv_safe
+import requests
+import time
+from utils.constants import REQUIRED_RAGAS_COLS, REQUIRED_CONTEXT_COLS, BACKEND_URL, JOB_PENDING, JOB_RUNNING, JOB_COMPLETED, JOB_FAILED
 from utils.formatting import styled_metric
 from components.filters import ragas_metric_filters
 from components.metrics import render_ragas_kpis, render_total_context_card
 from components.charts import render_keyword_coverage_chart, render_context_answer_scatter, render_ground_truth_quality, render_question_coverage
 from services.json_loader import load_json_safe
+from services.job_service import submit_job, get_job_status, download_csv, normalize_job_status
+
+
+def download_csv(job_id: str, output_type: str) -> pd.DataFrame:
+    resp = requests.get(f"{BACKEND_URL}/{job_id}/download/{output_type}")
+    resp.raise_for_status()
+    return pd.read_csv(BytesIO(resp.content))
 
 st.set_page_config(layout="wide", page_title="Dashboard")
 
@@ -243,134 +251,186 @@ if page == "RAG WisE Dashboard":
                         st.info("No RAG process log found for this message.")
 
 elif page == "RAGAS Dashboard":
-    st.set_page_config(
-        page_title="RAGAS BI Analytics OB2C 20260128 Overview",
-        layout="wide"
-    )
 
-# --------------------------- # Load data # --------------------------- 
+    # =========================================================
+    # Session State Initialization (CRITICAL)
+    # =========================================================
+    if "job_id" not in st.session_state:
+        st.session_state.job_id = None
+
+    if "ragas_df" not in st.session_state:
+        st.session_state.ragas_df = None
+
+    if "context_df" not in st.session_state:
+        st.session_state.context_df = None
+
+        st.set_page_config(
+            page_title="RAGAS BI Analytics",
+            layout="wide"
+        )
+
+    # =========================================================
+    # Sidebar – JSON Upload
+    # =========================================================
     st.sidebar.header("📤 Data Upload")
 
-    ragas_file = st.sidebar.file_uploader(
-        "Upload ragas_bi CSV",
-        type=["csv"],
-        help="Upload a ragas_bi CSV file"
+    json_file = st.sidebar.file_uploader(
+        "Upload RAG Evaluation JSON",
+        type=["json"],
+        help="Upload the input JSON for RAGAS evaluation"
     )
 
-    context_file = st.sidebar.file_uploader(
-        "Upload context_bi CSV",
-        type=["csv"],
-        help="Upload a context_bi CSV file"
-    )
-    
-    df, ragas_error = load_csv_safe(
-        ragas_file.getvalue() if ragas_file else None,
-        ragas_file.name if ragas_file else "default_ragas",
-        "ob2c_20260128_ragas_bi.csv",
-        REQUIRED_RAGAS_COLS
-    )
+    if "job_id" not in st.session_state and json_file is None:
+        st.info("⬅ Upload a JSON file and run evaluation to see results.")
 
-    context_df, context_error = load_csv_safe(
-        context_file.getvalue() if context_file else None,
-        context_file.name if context_file else "default context_bi",
-        "ob2c_20260128_context_bi.csv",
-        REQUIRED_CONTEXT_COLS
-    )
+    # =========================================================
+    # Submit Job
+    # =========================================================
+    if st.sidebar.button("🚀 Run RAGAS Evaluation"):
+        if json_file is None:
+            st.sidebar.error("Please upload a JSON file first.")
+            st.stop()
 
-    if ragas_error:
-        st.error(ragas_error)
-        st.info("Please upload a valid **ragas_bi CSV** with the correct format.")
+        with st.spinner("Submitting job to backend..."):
+            st.session_state.job_id = submit_job(json_file)  # ✅ CALL it
+            st.session_state.job_status = JOB_PENDING
+            st.session_state.ragas_df = None
+            st.session_state.context_df = None
+
+        st.rerun()  # 🔥 trigger polling immediately
+
+    # =========================================================
+    # Remove this after testing
+    # =========================================================  
+    if "job_id" in st.session_state and st.session_state.job_id:
+        st.sidebar.markdown("### 🧾 Backend Job ID")
+        st.sidebar.code(st.session_state.job_id)
+
+    # =========================================================
+    # Poll Job Status
+    # =========================================================
+
+    if "job_id" not in st.session_state:
+        st.info("⬅ Upload JSON and click **Run RAGAS Evaluation**")
+
+    if st.session_state.job_id is None:
+        st.info("⬅ Upload JSON and click **Run RAGAS Evaluation**")
         st.stop()
 
-    if context_error:
-        st.error(context_error)
-        st.info("Please upload a valid **context_bi CSV** with the correct format.")
+    job_id = st.session_state.job_id
+
+    status_resp = requests.get(f"{BACKEND_URL}/{job_id}")
+    status_resp.raise_for_status()
+    job = status_resp.json()
+    job_status = normalize_job_status(job.get("status"))
+
+    st.sidebar.info(f"🕒 Job status: {job_status}")
+
+    # =========================================================
+    # Job Failed
+    # =========================================================
+    if job_status == JOB_FAILED:
+        st.error("❌ Backend job failed")
         st.stop()
 
-    st.sidebar.success(
-        f"🧠 ragas_bi loaded: {ragas_file.name if ragas_file else 'Default dataset'}"
-    )
-    st.sidebar.success(
-        f"🧩 context_bi loaded: {context_file.name if context_file else 'Default dataset'}"
-    )
-     
-    st.title("RAGAS BI Analytics")
-    st.subheader("1. Ragas Analysis Dashboard OB2C 20260128")
+    # =========================================================
+    # Job Running → Auto Refresh
+    # =========================================================
+    if job_status in (JOB_PENDING, JOB_RUNNING):
+        st.info("⏳ RAGAS evaluation running… dashboard will appear automatically")
+        time.sleep(2)
+        st.rerun()
 
+    # =========================================================
+    # Download Results (ONCE)
+    # =========================================================
+    if job_status == JOB_COMPLETED and st.session_state.ragas_df is None:
+        st.session_state.ragas_df = download_csv(job_id, "ragas_bi")
+        st.session_state.context_df = download_csv(job_id, "context_bi")
+        st.rerun()
 
-    filtered_df, selected_metric = ragas_metric_filters(df)
+    ragas_df = st.session_state.ragas_df
+    context_df = st.session_state.context_df
 
-    render_ragas_kpis(filtered_df)
+    if ragas_df is None or context_df is None:
+        st.info("⏳ Waiting for evaluation results…")
+    else:
+        # DASHBOARD STARTS HERE
+        st.sidebar.success("✅ Evaluation completed")
 
-    total_contexts = len(context_df)
+        st.title("RAGAS BI Analytics")
+        st.subheader("1. RAGAS Analysis Dashboard")
 
-    render_total_context_card(total_contexts)
+        # ---------- Filters ----------
+        filtered_df, selected_metric = ragas_metric_filters(ragas_df)
 
-    st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
+        # ---------- KPI Cards ----------
+        render_ragas_kpis(filtered_df)
 
-    with st.expander("🔍 View Raw ragas_bi Data (Select a Ticket)"):
-        st.caption("Tick **one** ticket to view its related contexts")
+        # ---------- Total Contexts ----------
+        render_total_context_card(len(context_df))
 
-        if filtered_df.empty:
-            st.info("No tickets match the current filters.")
-        else:
-            selectable_df = filtered_df.copy()
+        st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
 
-            # Add checkbox column
-            if "select" not in selectable_df.columns:
-                selectable_df.insert(0, "select", False)
+        # ---------- Ticket → Context Drilldown ----------
+        with st.expander("🔍 View Raw ragas_bi Data (Select a Ticket)"):
+            st.caption("Tick **one** ticket to view its related contexts")
 
-            edited_df = st.data_editor(
-                selectable_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "select": st.column_config.CheckboxColumn(
-                        "Select",
-                        help="Select ONE ticket to view related contexts"
-                    )
-                },
-                disabled=[
-                    col for col in selectable_df.columns if col != "select"
-                ],
-                height=300
-            )
-
-            selected_rows = edited_df[edited_df["select"]]
-
-            if len(selected_rows) == 0:
-                st.info("Select a ticket above to view its contexts.")
-            elif len(selected_rows) > 1:
-                st.warning("Please select **only ONE** ticket.")
+            if filtered_df.empty:
+                st.info("No tickets match the current filters.")
             else:
-                selected_ticket_id = selected_rows.iloc[0]["ticket_id"]
+                selectable_df = filtered_df.copy()
 
-                st.divider()
-                st.subheader(f"📄 Contexts for Ticket: {selected_ticket_id}")
+                if "select" not in selectable_df.columns:
+                    selectable_df.insert(0, "select", False)
 
-                related_contexts = context_df[
-                    context_df["ticket_id"] == selected_ticket_id
-                ]
-
-                st.dataframe(
-                    related_contexts,
+                edited_df = st.data_editor(
+                    selectable_df,
                     use_container_width=True,
-                    height=400
+                    hide_index=True,
+                    column_config={
+                        "select": st.column_config.CheckboxColumn(
+                            "Select",
+                            help="Select ONE ticket"
+                        )
+                    },
+                    disabled=[c for c in selectable_df.columns if c != "select"],
+                    height=300
                 )
 
-    st.subheader("2. Context Analysis Dashboard")
+                selected_rows = edited_df[edited_df["select"]]
 
-    render_keyword_coverage_chart(context_df, filtered_df)
+                if len(selected_rows) == 1:
+                    ticket_id = selected_rows.iloc[0]["ticket_id"]
 
-    render_context_answer_scatter(context_df)
+                    st.subheader(f"📄 Contexts for Ticket: {ticket_id}")
 
-    col_gt, col_qc = st.columns(2)
+                    related_contexts = context_df[
+                        context_df["ticket_id"] == ticket_id
+                    ]
 
-    with col_gt:
-        render_ground_truth_quality(context_df)
+                    st.dataframe(
+                        related_contexts,
+                        use_container_width=True,
+                        height=400
+                    )
 
-    with col_qc:
-        render_question_coverage(context_df)
+        # =========================================================
+        # Context Analysis
+        # =========================================================
+        st.subheader("2. Context Analysis Dashboard")
+
+        render_keyword_coverage_chart(context_df, filtered_df)
+        render_context_answer_scatter(context_df)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            render_ground_truth_quality(context_df)
+
+        with col2:
+            render_question_coverage(context_df)
+
 
 elif page == "Ragas Evaluation Report":
     st.title("Ragas Evaluation Report")
