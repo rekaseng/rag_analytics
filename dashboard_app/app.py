@@ -39,7 +39,7 @@ DB_SCHEMA = 'public'  # Change this based on test_connection.py output
 # Sidebar navigation
 with st.sidebar:
     st.title("Navigation")
-    page = st.selectbox("Select Page", ["RAG WisE Dashboard", "RAGAS Dashboard", "Ragas Evaluation Report"])
+    page = st.selectbox("Select Page", ["RAG WisE Dashboard", "RAGAS Dashboard", "Ragas Results Comparison"])
     
     st.divider()
 
@@ -255,6 +255,9 @@ elif page == "RAGAS Dashboard":
     # =========================================================
     # Session State Initialization (CRITICAL)
     # =========================================================
+    if "job_done" not in st.session_state:
+        st.session_state.job_done = False
+
     if "job_id" not in st.session_state:
         st.session_state.job_id = None
 
@@ -264,10 +267,13 @@ elif page == "RAGAS Dashboard":
     if "context_df" not in st.session_state:
         st.session_state.context_df = None
 
-        st.set_page_config(
-            page_title="RAGAS BI Analytics",
-            layout="wide"
-        )
+    if "evaluation_df" not in st.session_state:
+        st.session_state.evaluation_df = None
+
+    st.set_page_config(
+        page_title="RAGAS BI Analytics",
+        layout="wide"
+    )
 
     # =========================================================
     # Sidebar – JSON Upload
@@ -319,10 +325,13 @@ elif page == "RAGAS Dashboard":
 
     job_id = st.session_state.job_id
 
-    status_resp = requests.get(f"{BACKEND_URL}/{job_id}")
-    status_resp.raise_for_status()
-    job = status_resp.json()
-    job_status = normalize_job_status(job.get("status"))
+    if not st.session_state.job_done:
+        status_resp = requests.get(f"{BACKEND_URL}/{job_id}")
+        status_resp.raise_for_status()
+        job = status_resp.json()
+        job_status = normalize_job_status(job.get("status"))
+    else:
+        job_status = JOB_COMPLETED
 
     st.sidebar.info(f"🕒 Job status: {job_status}")
 
@@ -344,15 +353,21 @@ elif page == "RAGAS Dashboard":
     # =========================================================
     # Download Results (ONCE)
     # =========================================================
-    if job_status == JOB_COMPLETED and st.session_state.ragas_df is None:
+    if (
+        job_status == JOB_COMPLETED
+        and not st.session_state.job_done
+    ):
         st.session_state.ragas_df = download_csv(job_id, "ragas_bi")
         st.session_state.context_df = download_csv(job_id, "context_bi")
+        st.session_state.evaluation_df = download_csv(job_id, "evaluation_bi")
+        st.session_state.job_done = True
         st.rerun()
 
     ragas_df = st.session_state.ragas_df
     context_df = st.session_state.context_df
+    evaluation_df = st.session_state.evaluation_df
 
-    if ragas_df is None or context_df is None:
+    if ragas_df is None or context_df is None or evaluation_df is None:
         st.info("⏳ Waiting for evaluation results…")
     else:
         # DASHBOARD STARTS HERE
@@ -416,6 +431,104 @@ elif page == "RAGAS Dashboard":
                     )
 
         # =========================================================
+        # Ragas Results Table
+        # =========================================================
+        try:
+            evaluate_df = evaluation_df
+        except Exception as e:
+            st.error(f"Failed to load CSV: {e}")
+            st.stop()
+
+        st.subheader("RAGAS Detailed Results")
+
+        # -----------------------------
+        # Normalize percentage columns (handle "81%", 0.81, 81)
+        # -----------------------------
+        percentage_columns = [
+            "answer_relevancy",
+            "faithfulness",
+            "context_recall",
+            "context_precision",
+            "answer_correctness",
+            "answer_similarity",
+            "context_entity_recall",
+        ]
+
+        for col in percentage_columns:
+            if col in evaluate_df.columns:
+                evaluate_df[col] = (
+                    evaluate_df[col]
+                    .astype(str)
+                    .str.replace("%", "", regex=False)   # remove %
+                )
+                evaluate_df[col] = pd.to_numeric(evaluate_df[col], errors="coerce")
+
+                # If values look like decimals (≤1), scale them
+                if evaluate_df[col].max(skipna=True) <= 1:
+                    evaluate_df[col] = evaluate_df[col] * 100
+
+                evaluate_df[col] = evaluate_df[col].round(0)
+
+
+        # -----------------------------
+        # Columns to display
+        # -----------------------------
+        columns_to_show = [
+            "question",
+            "rag_answer",
+            "answer_relevancy",
+            "faithfulness",
+            "context_recall",
+            "context_precision",
+            "answer_correctness",
+            "answer_similarity",
+            "context_entity_recall",
+        ]
+
+        missing_cols = set(columns_to_show) - set(evaluate_df.columns)
+        if missing_cols:
+            st.error(f"Missing columns in CSV: {missing_cols}")
+            st.stop()
+
+        df_display = evaluate_df[columns_to_show].copy()
+
+        # -----------------------------
+        # Conditional formatting
+        # -----------------------------
+        gradient_cmap = colors.LinearSegmentedColormap.from_list(
+        "rag_gradient",
+        [
+            (0.00, "#F8696B"),  # red
+            (0.40, "#FCFCFF"),  # neutral
+            (0.70, "#FCFCFF"),  # neutral
+            (1.00, "#63BE7B"),  # green
+        ]
+        )
+
+        metric_cols = columns_to_show[2:]  # all score columns
+
+        styled_df = (
+        df_display
+        .style
+        .format({col: "{:.0f}%" for col in metric_cols})
+        .background_gradient(
+            cmap=gradient_cmap,
+            subset=metric_cols,
+            vmin=0,
+            vmax=100
+        )
+        )
+
+        # -----------------------------
+        # Render table
+        # -----------------------------
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            height=650
+        )
+
+        # =========================================================
         # Context Analysis
         # =========================================================
         st.subheader("2. Context Analysis Dashboard")
@@ -432,152 +545,6 @@ elif page == "RAGAS Dashboard":
             render_question_coverage(context_df)
 
 
-elif page == "Ragas Evaluation Report":
-    st.title("Ragas Evaluation Report")
-
-    @st.cache_data
-    def load_ragas_csv(path: str):
-        return pd.read_csv(path)
-
-    csv_path = "ragas_results.csv"
-
-    try:
-        df = load_ragas_csv(csv_path)
-    except Exception as e:
-        st.error(f"Failed to load CSV: {e}")
-        st.stop()
-
-    st.subheader("RAGAS Detailed Results")
-
-    # -----------------------------
-    # Normalize percentage columns (handle "81%", 0.81, 81)
-    # -----------------------------
-    percentage_columns = [
-        "answer_relevancy",
-        "faithfulness",
-        "context_recall",
-        "context_precision",
-        "answer_correctness",
-        "answer_similarity",
-        "context_entity_recall",
-    ]
-
-    for col in percentage_columns:
-        if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace("%", "", regex=False)   # remove %
-            )
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-            # If values look like decimals (≤1), scale them
-            if df[col].max(skipna=True) <= 1:
-                df[col] = df[col] * 100
-
-            df[col] = df[col].round(0)
-
-
-    # -----------------------------
-    # Columns to display
-    # -----------------------------
-    columns_to_show = [
-        "question",
-        "rag_answer",
-        "answer_relevancy",
-        "faithfulness",
-        "context_recall",
-        "context_precision",
-        "answer_correctness",
-        "answer_similarity",
-        "context_entity_recall",
-    ]
-
-    missing_cols = set(columns_to_show) - set(df.columns)
-    if missing_cols:
-        st.error(f"Missing columns in CSV: {missing_cols}")
-        st.stop()
-
-    df_display = df[columns_to_show].copy()
-
-    # -----------------------------
-    # Conditional formatting
-    # -----------------------------
-    gradient_cmap = colors.LinearSegmentedColormap.from_list(
-    "rag_gradient",
-    [
-        (0.00, "#F8696B"),  # red
-        (0.40, "#FCFCFF"),  # neutral
-        (0.70, "#FCFCFF"),  # neutral
-        (1.00, "#63BE7B"),  # green
-    ]
-    )
-
-    metric_cols = columns_to_show[2:]  # all score columns
-
-    styled_df = (
-    df_display
-    .style
-    .format({col: "{:.0f}%" for col in metric_cols})
-    .background_gradient(
-        cmap=gradient_cmap,
-        subset=metric_cols,
-        vmin=0,
-        vmax=100
-    )
-    )
-
-    # -----------------------------
-    # Render table
-    # -----------------------------
-    st.dataframe(
-        styled_df,
-        use_container_width=True,
-        height=650
-    )
-
-    st.subheader("1. RAG 评估报告分析汇总 / RAG評価レポート分析サマリー")
-
-    summary_df = pd.DataFrame({
-        "Metric": [
-            "Context Entity Recall",
-            "Context Precision",
-            "Answer Correctness",
-            "Context Recall",
-            "Answer Relevancy",
-            "Faithfulness",
-        ],
-        "Score": [12.84, 45.09, 36.58, 47.16, 67.54, 85.27],
-        "Status": ["🔴 Critical", "🟠 Warning", "🟠 Warning", "🟠 Warning", "🟡 Average", "🟢 Good"],
-        "詳細分析": ["依然として非常に低く、重要なエンティティ（システム名、ID、重要項目など）がコンテキスト内で十分にカバーされていない点が、最大の課題となっています。",
-                    "各指標は小幅に改善しており、コンテキスト取得の量と一致度は向上していますが、精度面には依然として課題があります。", 
-                    "前回より改善しているものの、全体としてはまだ低水準であり、コンテキスト品質の影響を強く受けていることが分かります。", 
-                    "各指標は小幅に改善しており、コンテキスト取得の量と一致度は向上していますが、精度面には依然として課題があります。", 
-                    "前回と比べて明確な改善（＋9.44％）が見られ、回答内容は全体として質問の意図に対応できていることを示していますが、さらなる精度向上の余地は残されています。", 
-                    "高いスコアを示しており、回答は提供されたコンテキストに基づいて生成されており、幻覚のリスクは低いと判断できます。"],
-        "详细分析（中国语）": ["该指标依然处于较低水平，说明上下文中对关键实体（如系统名、编号、关键字段等）的覆盖不足，是当前最主要的瓶颈之一。",
-                    "指标均有小幅提升，说明检索到的上下文数量和匹配度有所改善，但当前仍存在“检索到但不够精准”的问题。", 
-                    "虽然比上一期有所提高，但整体仍偏低，反映出上下文质量不足会直接影响最终答案的准确性。", 
-                    "指标均有小幅提升，说明检索到的上下文数量和匹配度有所改善，但当前仍存在“检索到但不够精准”的问题。", 
-                    "相比上一期有明显提升（+9.44%），表明回答内容整体上能够回应问题意图，但仍有进一步精准化的空间。", 
-                    "得分较高，且相较上一期略有提升，说明模型在引用检索到的上下文时保持较好的事实一致性，幻觉风险较低。"],
-        "Previous": [11.78, 43.78, 34.55, 46.29, 58.10, 84.90],
-    })
-
-    st.dataframe(summary_df, use_container_width=True)
-
-    st.subheader("2. 問題の根本原因分析")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("""
-    **实体召回率问题（Context Entity Recall）**  
-    当前实体召回率仅 **12.84% (Critical)**，关键实体（系统名、ID、规则编号）未被充分覆盖。
-    """)
-
-    with col2:
-        st.markdown("""
-    **问题根源（中文）**  
-    当前检索策略偏向语义相似度，缺乏实体级约束与验证机制。
-    """)
+elif page == "Ragas Results Comparison":
+    st.title("RAGAS Results Comparison Dashboard")
+    st.info("RAGAS Results Comparison Dashboard - Coming Soon")
