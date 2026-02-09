@@ -1,5 +1,15 @@
 # utils/constants.py
 
+BACKEND_URL = "http://localhost:8000/api/jobs"
+
+# =========================
+# Job Status Constants
+# =========================
+JOB_PENDING = "pending"
+JOB_RUNNING = "running"
+JOB_COMPLETED = "completed"
+JOB_FAILED = "failed"
+
 # ---------------------------
 # Metric mapping (UI → column)
 # ---------------------------
