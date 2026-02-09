@@ -49,11 +49,6 @@ with st.sidebar:
         st.markdown("[Feedback Distribution](#feedback-distribution)")
         st.markdown("[Messages Over Time](#messages-over-time)")
         st.markdown("[User Feedback Summary](#user-feedback-summary)")
-    elif page == "Ragas Evaluation Report":
-        st.subheader("Quick Links")
-        st.markdown("[RAGAS Detailed Results](#ragas-detailed-results)")
-        st.markdown("[1. RAG 评估报告分析汇总 / RAG評価レポート分析サマリー](#ragas-analysis-results)")
-        st.markdown("[2. 問題の根本原因分析](#ragas-root-cause-analysis)")
 
 if page == "RAG WisE Dashboard":
     with st.spinner("Loading data..."):
