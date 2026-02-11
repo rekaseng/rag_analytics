@@ -14,13 +14,11 @@ import altair as alt
 from io import BytesIO
 import requests
 import time
-from utils.constants import REQUIRED_RAGAS_COLS, REQUIRED_CONTEXT_COLS, BACKEND_URL, JOB_PENDING, JOB_RUNNING, JOB_COMPLETED, JOB_FAILED
-from utils.formatting import styled_metric
+from utils.constants import BACKEND_URL, JOB_PENDING, JOB_RUNNING, JOB_COMPLETED, JOB_FAILED
 from components.filters import ragas_metric_filters
 from components.metrics import render_ragas_kpis, render_total_context_card
 from components.charts import render_keyword_coverage_chart, render_context_answer_scatter, render_ground_truth_quality, render_question_coverage
-from services.json_loader import load_json_safe
-from services.job_service import submit_job, get_job_status, download_csv, normalize_job_status
+from services.job_service import submit_job, download_csv, normalize_job_status
 
 
 def download_csv(job_id: str, output_type: str) -> pd.DataFrame:
@@ -39,7 +37,7 @@ DB_SCHEMA = 'public'  # Change this based on test_connection.py output
 # Sidebar navigation
 with st.sidebar:
     st.title("Navigation")
-    page = st.selectbox("Select Page", ["RAG WisE Dashboard", "RAGAS Dashboard", "Ragas Results Comparison"])
+    page = st.selectbox("Select Page", ["RAG WisE Dashboard", "RAGAS Dashboard"])
     
     st.divider()
 
@@ -262,9 +260,6 @@ elif page == "RAGAS Dashboard":
     if "context_df" not in st.session_state:
         st.session_state.context_df = None
 
-    if "evaluation_df" not in st.session_state:
-        st.session_state.evaluation_df = None
-
     st.set_page_config(
         page_title="RAGAS BI Analytics",
         layout="wide"
@@ -354,15 +349,13 @@ elif page == "RAGAS Dashboard":
     ):
         st.session_state.ragas_df = download_csv(job_id, "ragas_bi")
         st.session_state.context_df = download_csv(job_id, "context_bi")
-        st.session_state.evaluation_df = download_csv(job_id, "evaluation_bi")
         st.session_state.job_done = True
         st.rerun()
 
     ragas_df = st.session_state.ragas_df
     context_df = st.session_state.context_df
-    evaluation_df = st.session_state.evaluation_df
 
-    if ragas_df is None or context_df is None or evaluation_df is None:
+    if ragas_df is None or context_df is None:
         st.info("⏳ Waiting for evaluation results…")
     else:
         # DASHBOARD STARTS HERE
@@ -429,7 +422,7 @@ elif page == "RAGAS Dashboard":
         # Ragas Results Table
         # =========================================================
         try:
-            evaluate_df = evaluation_df
+            evaluate_df = filtered_df
         except Exception as e:
             st.error(f"Failed to load CSV: {e}")
             st.stop()
@@ -539,7 +532,3 @@ elif page == "RAGAS Dashboard":
         with col2:
             render_question_coverage(context_df)
 
-
-elif page == "Ragas Results Comparison":
-    st.title("RAGAS Results Comparison Dashboard")
-    st.info("RAGAS Results Comparison Dashboard - Coming Soon")

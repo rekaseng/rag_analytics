@@ -56,8 +56,5 @@ def run_pipeline(job_id: str, raw_bytes: bytes) -> dict:
     context_bi = rank_context_bi(context_bi)
     print("✓ Completed Context BI ranking")
 
-    evaluation_bi = build_evaluation_bi(raw)
-    print("✓ Completed Evaluation BI Summary")
-
     #Export outputs
-    return export_outputs(job_id, ragas_bi, context_bi, evaluation_bi)
+    return export_outputs(job_id, ragas_bi, context_bi)
