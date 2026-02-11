@@ -4,7 +4,7 @@ import os
 BASE = "outputs"
 os.makedirs(BASE, exist_ok=True)
 
-def export_outputs(job_id, ragas_bi, context_bi, evaluation_bi):
+def export_outputs(job_id, ragas_bi, context_bi):
     ragas_path = f"{BASE}/{job_id}_ragas_bi.csv"
     context_path = f"{BASE}/{job_id}_context_bi.csv"
 

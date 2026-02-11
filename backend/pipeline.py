@@ -6,7 +6,6 @@ from analyze.keyword_analyzer import extract_keywords
 from analyze.context_analyzer import analyze_contexts
 from flatten.ragas_bi_flattener import build_ragas_bi
 from flatten.context_bi_flattener import build_context_bi
-from flatten.evaluation_bi_flattener import build_evaluation_bi
 from export.exporter import export_outputs
 from analyze.llm_ranker import rank_ragas_bi, rank_context_bi
 

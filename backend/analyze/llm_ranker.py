@@ -189,35 +189,45 @@ def rank_ragas_bi(ragas_bi_rows: List[Dict]) -> List[Dict]:
 
 
 def rank_context_bi(context_bi: list) -> list:
-    payload = [
-        {
-            "ticket_id": r["ticket_id"],
-            "context_id": r["context_id"],
-            "context_char_count": r["context_char_count"],
-            "context_token_count": r["context_token_count"],
-            "question_keyword_coverage_pct": r["question_keyword_coverage_pct"],
-            "ground_truth_keyword_coverage_pct": r["ground_truth_keyword_coverage_pct"],
-            "rag_answer_keyword_coverage_pct": r["rag_answer_keyword_coverage_pct"],
-            "entity_match": r["entity_match"],
-            "is_context_useful": r["is_context_useful"],
-            "usefulness_reason": r["usefulness_reason"],
-            "drop_recommendation": r["drop_recommendation"],
-        }
-        for r in context_bi
-    ]
+    """
+    Rank contexts in batches to avoid token limit truncation.
+    Processes contexts in chunks of 50 to stay within token limits.
+    """
+    BATCH_SIZE = 50
+    ranking_map = {}
 
-    prompt = build_context_rank_prompt(payload)
-    response = invoke_claude(prompt)
+    # Process in batches
+    for i in range(0, len(context_bi), BATCH_SIZE):
+        batch = context_bi[i:i + BATCH_SIZE]
+        
+        payload = [
+            {
+                "ticket_id": r["ticket_id"],
+                "context_id": r["context_id"],
+                "context_char_count": r["context_char_count"],
+                "context_token_count": r["context_token_count"],
+                "question_keyword_coverage_pct": r["question_keyword_coverage_pct"],
+                "ground_truth_keyword_coverage_pct": r["ground_truth_keyword_coverage_pct"],
+                "rag_answer_keyword_coverage_pct": r["rag_answer_keyword_coverage_pct"],
+                "entity_match": r["entity_match"],
+                "is_context_useful": r["is_context_useful"],
+                "usefulness_reason": r["usefulness_reason"],
+                "drop_recommendation": r["drop_recommendation"],
+            }
+            for r in batch
+        ]
 
-    # 🔒 Defensive parsing
-    ranked_contexts = response.get("ranked_contexts", [])
+        prompt = build_context_rank_prompt(payload)
+        response = invoke_claude(prompt)
 
-    ranking_map = {
-        (r["ticket_id"], r["context_id"]): r
-        for r in ranked_contexts
-        if "ticket_id" in r and "context_id" in r
-    }
+        # 🔒 Defensive parsing
+        ranked_contexts = response.get("ranked_contexts", [])
 
+        for r in ranked_contexts:
+            if "ticket_id" in r and "context_id" in r:
+                ranking_map[(r["ticket_id"], r["context_id"])] = r
+
+    # Apply rankings to all contexts
     for row in context_bi:
         key = (row["ticket_id"], row["context_id"])
         rank_info = ranking_map.get(key)
